@@ -6,16 +6,31 @@ import {
   InvalidNameError,
   type Item,
   type Product,
+  type Purchase,
   type Session,
   type ShoppingList,
   type Store,
 } from '../data/types';
+import { historyView, productView, type HistoryTab } from './history-view';
 
-type Route = { name: 'lists' } | { name: 'list'; id: string };
+type Route =
+  | { name: 'lists' }
+  | { name: 'list'; id: string }
+  | { name: 'history'; tab: HistoryTab }
+  | { name: 'product'; key: string };
 
 function parseRoute(hash: string): Route {
-  const match = /^#\/liste\/([^/]+)$/.exec(hash);
-  return match ? { name: 'list', id: decodeURIComponent(match[1]) } : { name: 'lists' };
+  let match = /^#\/liste\/([^/]+)$/.exec(hash);
+  if (match) return { name: 'list', id: decodeURIComponent(match[1]) };
+  match = /^#\/historique\/produit\/([^/]+)$/.exec(hash);
+  if (match) return { name: 'product', key: decodeURIComponent(match[1]) };
+  if (hash === '#/historique/produits') return { name: 'history', tab: 'products' };
+  if (hash === '#/historique') return { name: 'history', tab: 'sessions' };
+  return { name: 'lists' };
+}
+
+function isHistoryRoute(route: Route): boolean {
+  return route.name === 'history' || route.name === 'product';
 }
 
 export function listHref(id: string): string {
@@ -36,6 +51,8 @@ interface State {
   editingNoteOf: string | null;
   /** Dernière séance validée, pour pouvoir l'annuler. */
   lastSession: Session | null;
+  sessions: Session[];
+  purchases: Purchase[];
 }
 
 function articles(n: number): string {
@@ -58,6 +75,8 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
     message: '',
     editingNoteOf: null,
     lastSession: null,
+    sessions: [],
+    purchases: [],
   };
 
   let loadSeq = 0;
@@ -71,6 +90,9 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
     const route = state.route;
     const list = route.name === 'list' ? lists.find((l) => l.id === route.id) : undefined;
     const items = list ? await store.getItems(list.id) : [];
+    const [sessions, purchases] = isHistoryRoute(route)
+      ? await Promise.all([store.getSessions(), store.getAllPurchases()])
+      : [[], []];
     if (seq !== loadSeq) return; // un chargement plus récent a pris le relais
     Object.assign(state, {
       loaded: true,
@@ -79,6 +101,8 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
       products: new Map(products.map((p) => [p.key, p])),
       list,
       items,
+      sessions,
+      purchases,
     });
     draw();
   }
@@ -199,14 +223,33 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
 
   function view(): TemplateResult {
     if (!state.loaded) return html``;
-    if (state.route.name === 'list') return state.list ? listView(state.list) : notFoundView();
-    return listsView();
+    const route = state.route;
+    const historyData = () => ({
+      sessions: state.sessions,
+      purchases: state.purchases,
+      products: state.products,
+      lists: state.lists,
+      now: Date.now(),
+    });
+    switch (route.name) {
+      case 'list':
+        return state.list ? listView(state.list) : notFoundView();
+      case 'history':
+        return historyView(historyData(), route.tab);
+      case 'product':
+        return productView(historyData(), route.key);
+      case 'lists':
+        return listsView();
+    }
   }
 
   function listsView(): TemplateResult {
     return html`
       <main class="shell">
-        <header class="bar"><h1>Mes listes</h1></header>
+        <header class="bar">
+          <h1>Mes listes</h1>
+          <a class="header-link" href="#/historique">Historique</a>
+        </header>
         ${state.lists.length
           ? html`<ul class="lists">
               ${state.lists.map((list) => {

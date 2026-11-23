@@ -82,6 +82,8 @@ export interface Store {
   undoSession(sessionId: string): Promise<void>;
   getSessions(): Promise<Session[]>;
   getPurchases(sessionId: string): Promise<Purchase[]>;
+  /** Tout l'historique, toutes listes confondues. */
+  getAllPurchases(): Promise<Purchase[]>;
 
   /** Prévient quand les données changent. Renvoie la fonction de désabonnement. */
   subscribe(listener: () => void): () => void;

@@ -244,6 +244,10 @@ export class IdbStore implements Store {
     return this.db.getAllFromIndex('purchases', 'bySession', sessionId);
   }
 
+  getAllPurchases(): Promise<Purchase[]> {
+    return this.db.getAll('purchases');
+  }
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

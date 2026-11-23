@@ -202,6 +202,20 @@ describe('courses', () => {
     expect(lait[0].checkedAt).toBeUndefined();
   });
 
+  it('rassemble l’historique de toutes les listes', async () => {
+    const other = await store.createList('Autre');
+    await store.addItem(other.id, 'Lait');
+    await store.setItemChecked(`${other.id}|lait`, true);
+    await store.setItemChecked(`${listId}|lait`, true);
+    await store.setItemChecked(`${listId}|sel`, true);
+    await store.finishShopping(listId);
+    await store.finishShopping(other.id);
+
+    const all = await store.getAllPurchases();
+    expect(all.map((p) => p.productKey).sort()).toEqual(['lait', 'lait', 'sel']);
+    expect(await store.getSessions()).toHaveLength(2);
+  });
+
   it('l’historique survit à la suppression de la liste', async () => {
     await store.setItemChecked(`${listId}|lait`, true);
     const session = await store.finishShopping(listId);
