@@ -14,11 +14,13 @@ En ligne : https://gitchy-man.github.io/LeGardeManger/ (dépôt public `gitchy-m
 
 ## Plan par versions
 
+Plan détaillé (étapes, tests, état) : `docs/PLAN.md`, à tenir à jour en même temps que ce résumé.
+
 Une étape = une version livrée (`npm version x.y.0 --no-git-tag-version`), chaque étape a un test concret
 (unitaire + Playwright), puis un test manuel sur les téléphones de l'utilisateur (Android et iPhone).
 
 - **A, seul, données sur l'appareil** : A0 squelette PWA ✅, A1 listes/articles/suggestions ✅,
-  A2 mode courses ✅, A3 historique ✅, **A4 hors ligne complet + export/import JSON** (prochaine étape).
+  A2 mode courses ✅, A3 historique (à valider sur téléphone), **A4 hors ligne complet + export/import JSON** (prochaine étape).
   Ensuite : pause de quelques semaines d'usage réel avant la version B.
 - **B, comptes et synchro (l'utilisateur seul, plusieurs appareils)** : choisir le serveur à ce moment-là
   (Firebase, Supabase ou auto-hébergé type PocketBase) ; migration des données locales via l'import.
