@@ -20,7 +20,7 @@ Une étape = une version livrée (`npm version x.y.0 --no-git-tag-version`), cha
 (unitaire + Playwright), puis un test manuel sur les téléphones de l'utilisateur (Android et iPhone).
 
 - **A, seul, données sur l'appareil** : A0 squelette PWA ✅, A1 listes/articles/suggestions ✅,
-  A2 mode courses ✅, A3 historique (à valider sur téléphone), **A4 hors ligne complet + export/import JSON** (prochaine étape).
+  A2 mode courses ✅, A3 historique (à valider sur téléphone), A4 hors ligne complet + export/import JSON (à valider sur téléphone).
   Ensuite : pause de quelques semaines d'usage réel avant la version B.
 - **B, comptes et synchro (l'utilisateur seul, plusieurs appareils)** : choisir le serveur à ce moment-là
   (Firebase, Supabase ou auto-hébergé type PocketBase) ; migration des données locales via l'import.
@@ -50,8 +50,11 @@ Une étape = une version livrée (`npm version x.y.0 --no-git-tag-version`), cha
   Ne jamais modifier les blocs existants ; tester la mise à niveau depuis la version précédente
   (voir le test « mise à niveau des données existantes »). L'utilisateur a de vraies données sur ses téléphones.
 - Logique pure dans `src/domain/` (testée unitairement), affichage dans `src/ui/`.
-- Navigation par hash (`#/liste/<id>`, `#/historique`, `#/historique/produits`, `#/historique/produit/<clé>`),
-  compatible GitHub Pages.
+- Navigation par hash (`#/liste/<id>`, `#/historique`, `#/historique/produits`, `#/historique/produit/<clé>`,
+  `#/sauvegarde`), compatible GitHub Pages.
+- Sauvegarde JSON (`src/domain/backup.ts`) : fichier versionné (`format`) ; l'import fusionne sans rien
+  écraser ni supprimer, une liste de même nom est réunie avec l'existante. Si le contenu stocké change,
+  incrémenter `BACKUP_FORMAT` et garder les anciens fichiers lisibles.
 
 ## Conventions
 

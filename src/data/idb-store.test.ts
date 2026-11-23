@@ -255,6 +255,67 @@ describe('mise à niveau des données existantes', () => {
   });
 });
 
+describe('sauvegarde', () => {
+  async function fill(target: IdbStore) {
+    const [courses] = await target.getLists();
+    const apero = await target.createList('Apéro');
+    await target.addItem(courses.id, 'Lait', 'x2');
+    await target.addItem(courses.id, 'Sel');
+    await target.addItem(apero.id, 'Chips');
+    await target.setItemChecked(`${courses.id}|sel`, true);
+    await target.finishShopping(courses.id);
+    await target.addItem(courses.id, 'Pâtes');
+    await target.setItemChecked(`${courses.id}|pates`, true);
+  }
+
+  const sorted = <T>(rows: T[], key: (row: T) => string) =>
+    [...rows].sort((a, b) => key(a).localeCompare(key(b)));
+
+  it('exporter puis importer dans une appli neuve redonne les mêmes données', async () => {
+    await fill(store);
+    const exported = await store.exportData();
+    expect(exported.lists).toHaveLength(2);
+    expect(exported.items).toHaveLength(3);
+    expect(exported.sessions).toHaveLength(1);
+    expect(exported.purchases).toHaveLength(1);
+
+    // Appli neuve : sa liste « Courses » de départ est réunie avec celle du fichier.
+    const other = await openFresh();
+    const report = await other.importData(exported);
+    expect(report).toEqual({ lists: 1, items: 3, sessions: 1 });
+
+    const imported = await other.exportData();
+    const courses = (await other.getLists()).find((l) => l.name === 'Courses')!;
+    const exportedCourses = exported.lists.find((l) => l.name === 'Courses')!;
+    const remap = (listId: string) => (listId === exportedCourses.id ? courses.id : listId);
+    expect(sorted(imported.items, (i) => i.id)).toEqual(
+      sorted(
+        exported.items.map((i) => ({ ...i, listId: remap(i.listId), id: `${remap(i.listId)}|${i.productKey}` })),
+        (i) => i.id,
+      ),
+    );
+    expect(sorted(imported.products, (p) => p.key)).toEqual(sorted(exported.products, (p) => p.key));
+    expect(imported.sessions).toEqual(exported.sessions.map((s) => ({ ...s, listId: remap(s.listId) })));
+    expect(imported.purchases).toEqual(exported.purchases.map((p) => ({ ...p, listId: remap(p.listId) })));
+    expect(await other.getItems(courses.id)).toHaveLength(2);
+
+    // Un deuxième import ne change rien.
+    expect(await other.importData(exported)).toEqual({ lists: 0, items: 0, sessions: 0 });
+    other.close();
+  });
+
+  it('l’import prévient les abonnés', async () => {
+    await fill(store);
+    const exported = await store.exportData();
+    const other = await openFresh();
+    const listener = vi.fn();
+    other.subscribe(listener);
+    await other.importData(exported);
+    expect(listener).toHaveBeenCalledTimes(1);
+    other.close();
+  });
+});
+
 describe('abonnement', () => {
   it('prévient à chaque modification, pas après le désabonnement', async () => {
     const listener = vi.fn();

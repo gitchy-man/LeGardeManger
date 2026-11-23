@@ -1,4 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { planImport, type BackupData, type ImportReport } from '../domain/backup';
 import { cleanLabel, productKey } from '../domain/normalize';
 import {
   InvalidNameError,
@@ -32,6 +33,7 @@ export interface IdbStoreOptions {
 }
 
 const DEFAULT_LIST_NAME = 'Courses';
+const STORES = ['lists', 'products', 'items', 'sessions', 'purchases'] as const;
 
 export async function openIdbStore(options: IdbStoreOptions = {}): Promise<IdbStore> {
   const db = await openDB<Schema>(options.dbName ?? 'garde-manger', 2, {
@@ -246,6 +248,42 @@ export class IdbStore implements Store {
 
   getAllPurchases(): Promise<Purchase[]> {
     return this.db.getAll('purchases');
+  }
+
+  async exportData(): Promise<BackupData> {
+    const tx = this.db.transaction(STORES, 'readonly');
+    const [lists, products, items, sessions, purchases] = await Promise.all([
+      tx.objectStore('lists').getAll(),
+      tx.objectStore('products').getAll(),
+      tx.objectStore('items').getAll(),
+      tx.objectStore('sessions').getAll(),
+      tx.objectStore('purchases').getAll(),
+    ]);
+    await tx.done;
+    return { lists, products, items, sessions, purchases };
+  }
+
+  async importData(data: BackupData): Promise<ImportReport> {
+    // Lecture et écriture dans la même transaction : rien ne peut changer entre les deux.
+    const tx = this.db.transaction(STORES, 'readwrite');
+    const [lists, products, items, sessions, purchases] = await Promise.all([
+      tx.objectStore('lists').getAll(),
+      tx.objectStore('products').getAll(),
+      tx.objectStore('items').getAll(),
+      tx.objectStore('sessions').getAll(),
+      tx.objectStore('purchases').getAll(),
+    ]);
+    const { add, report } = planImport({ lists, products, items, sessions, purchases }, data);
+    await Promise.all([
+      ...add.lists.map((r) => tx.objectStore('lists').put(r)),
+      ...add.products.map((r) => tx.objectStore('products').put(r)),
+      ...add.items.map((r) => tx.objectStore('items').put(r)),
+      ...add.sessions.map((r) => tx.objectStore('sessions').put(r)),
+      ...add.purchases.map((r) => tx.objectStore('purchases').put(r)),
+    ]);
+    await tx.done;
+    this.notify();
+    return report;
   }
 
   subscribe(listener: () => void): () => void {

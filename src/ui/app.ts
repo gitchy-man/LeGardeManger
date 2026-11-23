@@ -11,10 +11,18 @@ import {
   type ShoppingList,
   type Store,
 } from '../data/types';
+import {
+  InvalidBackupError,
+  makeBackup,
+  parseBackup,
+  type BackupData,
+} from '../domain/backup';
+import { backupView, contentSummary, importMessage } from './backup-view';
 import { historyView, productView, type HistoryTab } from './history-view';
 
 type Route =
   | { name: 'lists' }
+  | { name: 'backup' }
   | { name: 'list'; id: string }
   | { name: 'history'; tab: HistoryTab }
   | { name: 'product'; key: string };
@@ -26,6 +34,7 @@ function parseRoute(hash: string): Route {
   if (match) return { name: 'product', key: decodeURIComponent(match[1]) };
   if (hash === '#/historique/produits') return { name: 'history', tab: 'products' };
   if (hash === '#/historique') return { name: 'history', tab: 'sessions' };
+  if (hash === '#/sauvegarde') return { name: 'backup' };
   return { name: 'lists' };
 }
 
@@ -53,6 +62,24 @@ interface State {
   lastSession: Session | null;
   sessions: Session[];
   purchases: Purchase[];
+  /** Données prêtes à exporter (écran Sauvegarde). */
+  backupData: BackupData | undefined;
+}
+
+/** Date locale au format AAAA-MM-JJ, pour le nom du fichier. */
+function localDate(time: number): string {
+  const d = new Date(time);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function download(file: File): void {
+  const url = URL.createObjectURL(file);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = file.name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 function articles(n: number): string {
@@ -77,6 +104,7 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
     lastSession: null,
     sessions: [],
     purchases: [],
+    backupData: undefined,
   };
 
   let loadSeq = 0;
@@ -93,6 +121,8 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
     const [sessions, purchases] = isHistoryRoute(route)
       ? await Promise.all([store.getSessions(), store.getAllPurchases()])
       : [[], []];
+    // Préparées à l'avance : le partage doit partir tout de suite après le toucher (iPhone).
+    const backupData = route.name === 'backup' ? await store.exportData() : undefined;
     if (seq !== loadSeq) return; // un chargement plus récent a pris le relais
     Object.assign(state, {
       loaded: true,
@@ -103,6 +133,7 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
       items,
       sessions,
       purchases,
+      backupData,
     });
     draw();
   }
@@ -219,6 +250,55 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
     await store.undoSession(session.id);
   }
 
+  function exportData(): void {
+    const data = state.backupData;
+    if (!data) return;
+    const now = Date.now();
+    const file = new File(
+      [JSON.stringify(makeBackup(data, version, now), null, 2)],
+      `garde-manger-${localDate(now)}.json`,
+      { type: 'application/json' },
+    );
+    const done = () => {
+      say('Sauvegarde exportée.');
+      draw();
+    };
+    // Sur téléphone, le partage permet « Enregistrer dans Fichiers », Drive, mail…
+    if (navigator.canShare?.({ files: [file] })) {
+      navigator.share({ files: [file] }).then(done, (error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        download(file);
+        done();
+      });
+    } else {
+      download(file);
+      done();
+    }
+  }
+
+  async function importData(input: HTMLInputElement): Promise<void> {
+    const file = input.files?.[0];
+    // Remise à zéro : on peut reprendre le même fichier ensuite.
+    input.value = '';
+    if (!file) return;
+    try {
+      const backup = parseBackup(await file.text());
+      const when = backup.exportedAt
+        ? ` du ${new Date(backup.exportedAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}`
+        : '';
+      if (!confirm(`Importer la sauvegarde${when} (${contentSummary(backup)}) ?\nRien ne sera supprimé ni écrasé.`)) {
+        say('Import annulé.');
+        draw();
+        return;
+      }
+      say(importMessage(await store.importData(backup)));
+    } catch (error) {
+      if (!(error instanceof InvalidBackupError)) throw error;
+      say(error.message);
+    }
+    draw();
+  }
+
   // ---------- Vues ----------
 
   function view(): TemplateResult {
@@ -238,6 +318,15 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
         return historyView(historyData(), route.tab);
       case 'product':
         return productView(historyData(), route.key);
+      case 'backup':
+        return state.backupData
+          ? backupView({
+              data: state.backupData,
+              message: state.message,
+              onExport: exportData,
+              onImport: (input) => void importData(input),
+            })
+          : html``;
       case 'lists':
         return listsView();
     }
@@ -267,7 +356,10 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
           <input name="name" placeholder="Nouvelle liste" aria-label="Nom de la nouvelle liste" enterkeyhint="done" />
           <button class="primary">Créer</button>
         </form>
-        <p class="version">Version ${version}</p>
+        <footer class="version">
+          <a class="header-link" href="#/sauvegarde">Sauvegarde</a>
+          <span>Version ${version}</span>
+        </footer>
       </main>
     `;
   }

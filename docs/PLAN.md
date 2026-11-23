@@ -15,7 +15,7 @@ PWA de gestion de courses. Données locales (version A), hébergée sur GitHub P
 | A1 | Listes et articles : plusieurs listes, suggestions, normalisation des noms, note facultative | Tests unitaires de normalisation ; "Lait" puis "lait " = un seul article ; rechargement | fait |
 | A2 | Mode courses : cocher, décocher, "Courses terminées" | 4 articles, 3 cochés, 1 décoché, rechargement, validation : 2 partent dans l'historique, 2 restent | fait |
 | A3 | Historique : par séance, par produit, toutes listes confondues | Tests unitaires sur dates fixes ; vérification visuelle | à valider |
-| A4 | Hors ligne complet, export et import JSON | Mode avion : ouvrir, cocher, valider ; aller-retour exporter, vider, importer | à faire |
+| A4 | Hors ligne complet, export et import JSON | Mode avion : ouvrir, cocher, valider ; aller-retour exporter, vider, importer | à valider |
 
 Pause : quelques semaines d'usage réel avant la version B.
 

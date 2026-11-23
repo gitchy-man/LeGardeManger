@@ -4,6 +4,8 @@
  * en version B on la remplacera par une implémentation en ligne.
  */
 
+import type { BackupData, ImportReport } from '../domain/backup';
+
 export interface ShoppingList {
   id: string;
   name: string;
@@ -84,6 +86,11 @@ export interface Store {
   getPurchases(sessionId: string): Promise<Purchase[]>;
   /** Tout l'historique, toutes listes confondues. */
   getAllPurchases(): Promise<Purchase[]>;
+
+  /** Toutes les données, pour la sauvegarde dans un fichier. */
+  exportData(): Promise<BackupData>;
+  /** Ajoute les données d'une sauvegarde sans rien écraser ni supprimer (voir `planImport`). */
+  importData(data: BackupData): Promise<ImportReport>;
 
   /** Prévient quand les données changent. Renvoie la fonction de désabonnement. */
   subscribe(listener: () => void): () => void;
