@@ -1,0 +1,339 @@
+import { html, nothing, render, type TemplateResult } from 'lit-html';
+import { live } from 'lit-html/directives/live.js';
+import { suggestProducts, type Suggestion } from '../domain/suggest';
+import {
+  InvalidNameError,
+  type Item,
+  type Product,
+  type ShoppingList,
+  type Store,
+} from '../data/types';
+
+type Route = { name: 'lists' } | { name: 'list'; id: string };
+
+function parseRoute(hash: string): Route {
+  const match = /^#\/liste\/([^/]+)$/.exec(hash);
+  return match ? { name: 'list', id: decodeURIComponent(match[1]) } : { name: 'lists' };
+}
+
+export function listHref(id: string): string {
+  return `#/liste/${encodeURIComponent(id)}`;
+}
+
+interface State {
+  route: Route;
+  loaded: boolean;
+  lists: ShoppingList[];
+  counts: Map<string, number>;
+  products: Map<string, Product>;
+  list: ShoppingList | undefined;
+  items: Item[];
+  query: string;
+  note: string;
+  message: string;
+  editingNoteOf: string | null;
+}
+
+const collator = new Intl.Collator('fr', { sensitivity: 'base', numeric: true });
+
+export function startApp(root: HTMLElement, store: Store, version: string): () => void {
+  const state: State = {
+    route: parseRoute(location.hash),
+    loaded: false,
+    lists: [],
+    counts: new Map(),
+    products: new Map(),
+    list: undefined,
+    items: [],
+    query: '',
+    note: '',
+    message: '',
+    editingNoteOf: null,
+  };
+
+  let loadSeq = 0;
+  async function load(): Promise<void> {
+    const seq = ++loadSeq;
+    const [lists, products] = await Promise.all([store.getLists(), store.getProducts()]);
+    const counts = new Map<string, number>();
+    await Promise.all(
+      lists.map(async (l) => counts.set(l.id, (await store.getItems(l.id)).length)),
+    );
+    const route = state.route;
+    const list = route.name === 'list' ? lists.find((l) => l.id === route.id) : undefined;
+    const items = list ? await store.getItems(list.id) : [];
+    if (seq !== loadSeq) return; // un chargement plus récent a pris le relais
+    Object.assign(state, {
+      loaded: true,
+      lists,
+      counts,
+      products: new Map(products.map((p) => [p.key, p])),
+      list,
+      items,
+    });
+    draw();
+  }
+
+  function draw(): void {
+    render(view(), root);
+  }
+
+  function labelOf(item: Item): string {
+    return state.products.get(item.productKey)?.label ?? item.productKey;
+  }
+
+  function say(message: string): void {
+    state.message = message;
+  }
+
+  // ---------- Actions ----------
+
+  async function createList(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    const form = event.target as HTMLFormElement;
+    const input = form.elements.namedItem('name') as HTMLInputElement;
+    try {
+      const list = await store.createList(input.value);
+      form.reset();
+      location.hash = listHref(list.id);
+    } catch (error) {
+      if (!(error instanceof InvalidNameError)) throw error;
+      input.focus();
+    }
+  }
+
+  async function renameList(list: ShoppingList): Promise<void> {
+    const name = prompt('Nouveau nom de la liste', list.name);
+    if (name === null) return;
+    try {
+      await store.renameList(list.id, name);
+    } catch (error) {
+      if (!(error instanceof InvalidNameError)) throw error;
+      alert(error.message);
+    }
+  }
+
+  async function deleteList(list: ShoppingList): Promise<void> {
+    const count = state.items.length;
+    const detail = count === 0 ? '' : count === 1 ? ' et son article' : ` et ses ${count} articles`;
+    if (!confirm(`Supprimer la liste « ${list.name} »${detail} ?`)) return;
+    await store.deleteList(list.id);
+    location.hash = '#/';
+  }
+
+  async function addItem(name: string, note: string): Promise<void> {
+    const list = state.list;
+    if (!list) return;
+    // On vide les champs tout de suite : l'article suivant peut être tapé
+    // pendant l'enregistrement sans être effacé ensuite.
+    state.query = '';
+    state.note = '';
+    draw();
+    try {
+      const result = await store.addItem(list.id, name, note);
+      say(
+        result.status === 'added'
+          ? `${result.product.label} ajouté.`
+          : `${result.product.label} est déjà dans la liste.`,
+      );
+    } catch (error) {
+      if (!(error instanceof InvalidNameError)) throw error;
+      say('Tapez le nom d’un article.');
+    }
+    draw();
+    root.querySelector<HTMLInputElement>('#item-name')?.focus();
+  }
+
+  function onAddSubmit(event: SubmitEvent): void {
+    event.preventDefault();
+    void addItem(state.query, state.note);
+  }
+
+  function pickSuggestion(suggestion: Suggestion<Product>): void {
+    if (suggestion.inList) {
+      say(`${suggestion.product.label} est déjà dans la liste.`);
+      state.query = '';
+      draw();
+      return;
+    }
+    void addItem(suggestion.product.label, state.note);
+  }
+
+  async function saveNote(item: Item, value: string): Promise<void> {
+    state.editingNoteOf = null;
+    if (value.trim() !== item.note) await store.setItemNote(item.id, value);
+    else draw();
+  }
+
+  async function removeItem(item: Item): Promise<void> {
+    await store.removeItem(item.id);
+    say(`${labelOf(item)} retiré.`);
+  }
+
+  // ---------- Vues ----------
+
+  function view(): TemplateResult {
+    if (!state.loaded) return html``;
+    if (state.route.name === 'list') return state.list ? listView(state.list) : notFoundView();
+    return listsView();
+  }
+
+  function listsView(): TemplateResult {
+    return html`
+      <main class="shell">
+        <header class="bar"><h1>Mes listes</h1></header>
+        ${state.lists.length
+          ? html`<ul class="lists">
+              ${state.lists.map((list) => {
+                const n = state.counts.get(list.id) ?? 0;
+                return html`<li>
+                  <a href=${listHref(list.id)}>
+                    <span class="name">${list.name}</span>
+                    <span class="count">${n ? `${n} article${n > 1 ? 's' : ''}` : 'vide'}</span>
+                  </a>
+                </li>`;
+              })}
+            </ul>`
+          : html`<p class="empty">Aucune liste pour l’instant.</p>`}
+        <form class="row" @submit=${createList} autocomplete="off">
+          <input name="name" placeholder="Nouvelle liste" aria-label="Nom de la nouvelle liste" enterkeyhint="done" />
+          <button class="primary">Créer</button>
+        </form>
+        <p class="version">Version ${version}</p>
+      </main>
+    `;
+  }
+
+  function notFoundView(): TemplateResult {
+    return html`
+      <main class="shell">
+        <header class="bar"><a class="back" href="#/" aria-label="Retour aux listes">‹</a><h1>Liste introuvable</h1></header>
+        <p class="empty">Cette liste n’existe plus.</p>
+      </main>
+    `;
+  }
+
+  function listView(list: ShoppingList): TemplateResult {
+    const keysInList = new Set(state.items.map((i) => i.productKey));
+    const suggestions = suggestProducts(state.query, state.products.values(), keysInList);
+    const items = [...state.items].sort((a, b) => collator.compare(labelOf(a), labelOf(b)));
+
+    return html`
+      <main class="shell">
+        <header class="bar">
+          <a class="back" href="#/" aria-label="Retour aux listes">‹</a>
+          <h1>${list.name}</h1>
+          <button class="icon" @click=${() => renameList(list)} aria-label="Renommer la liste" title="Renommer">✎</button>
+          <button class="icon" @click=${() => deleteList(list)} aria-label="Supprimer la liste" title="Supprimer">🗑</button>
+        </header>
+
+        <form class="add" @submit=${onAddSubmit} autocomplete="off">
+          <div class="row">
+            <input
+              id="item-name"
+              aria-label="Article"
+              placeholder="Il me manque…"
+              enterkeyhint="done"
+              autocapitalize="sentences"
+              .value=${live(state.query)}
+              @input=${(e: InputEvent) => {
+                state.query = (e.target as HTMLInputElement).value;
+                state.message = '';
+                draw();
+              }}
+            />
+            <button class="primary">Ajouter</button>
+          </div>
+          <input
+            id="item-note"
+            class="note-input"
+            aria-label="Note"
+            placeholder="Note (facultatif) : x2, bio…"
+            enterkeyhint="done"
+            .value=${live(state.note)}
+            @input=${(e: InputEvent) => (state.note = (e.target as HTMLInputElement).value)}
+          />
+        </form>
+
+        ${suggestions.length
+          ? html`<ul class="suggestions" aria-label="Suggestions">
+              ${suggestions.map(
+                (s) => html`<li>
+                  <button type="button" @click=${() => pickSuggestion(s)}>
+                    ${s.product.label}
+                    ${s.inList ? html`<small>déjà dans la liste</small>` : nothing}
+                  </button>
+                </li>`,
+              )}
+            </ul>`
+          : nothing}
+
+        <p class="message" role="status">${state.message}</p>
+
+        ${items.length
+          ? html`<ul class="items" aria-label="Articles">
+              ${items.map((item) => itemView(item))}
+            </ul>`
+          : html`<p class="empty">Rien ne manque pour l’instant.</p>`}
+      </main>
+    `;
+  }
+
+  function itemView(item: Item): TemplateResult {
+    const label = labelOf(item);
+    const editing = state.editingNoteOf === item.id;
+    return html`<li class="item">
+      <div class="text">
+        <span class="label">${label}</span>
+        ${editing
+          ? html`<input
+              class="note-edit"
+              aria-label=${`Note pour ${label}`}
+              .value=${item.note}
+              enterkeyhint="done"
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                if (e.key === 'Escape') {
+                  state.editingNoteOf = null;
+                  draw();
+                }
+              }}
+              @blur=${(e: FocusEvent) => saveNote(item, (e.target as HTMLInputElement).value)}
+            />`
+          : item.note
+            ? html`<span class="note">${item.note}</span>`
+            : nothing}
+      </div>
+      <button
+        class="icon"
+        aria-label=${`Modifier la note de ${label}`}
+        title="Note"
+        @click=${() => {
+          state.editingNoteOf = item.id;
+          draw();
+          root.querySelector<HTMLInputElement>('.note-edit')?.focus();
+        }}
+      >✎</button>
+      <button class="icon" aria-label=${`Retirer ${label}`} title="Retirer" @click=${() => removeItem(item)}>✕</button>
+    </li>`;
+  }
+
+  // ---------- Branchements ----------
+
+  const onHashChange = () => {
+    state.route = parseRoute(location.hash);
+    state.query = '';
+    state.note = '';
+    state.message = '';
+    state.editingNoteOf = null;
+    void load();
+  };
+  window.addEventListener('hashchange', onHashChange);
+  const unsubscribe = store.subscribe(() => void load());
+  void load();
+
+  return () => {
+    window.removeEventListener('hashchange', onHashChange);
+    unsubscribe();
+  };
+}

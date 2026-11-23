@@ -1,18 +1,27 @@
 :root {
   --bg: #f6f4ef;
+  --surface: #ffffff;
   --fg: #1f2421;
   --muted: #6b716c;
+  --line: #dcd8cf;
   --accent: #2f6b3f;
+  --on-accent: #ffffff;
+  --danger: #a33a2c;
   color-scheme: light dark;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #161a17;
+    --surface: #1f2421;
     --fg: #eceee9;
     --muted: #9aa19b;
+    --line: #343b36;
     --accent: #7cc28e;
+    --on-accent: #10261a;
+    --danger: #e58a7c;
   }
 }
 
@@ -32,16 +41,201 @@ body {
 .shell {
   max-width: 40rem;
   margin: 0 auto;
-  padding: 1.5rem 1rem;
+  padding: 1rem;
 }
 
-h1 {
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ---------- En-tête ---------- */
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+  min-height: 3rem;
+}
+
+.bar h1 {
+  flex: 1;
+  margin: 0;
+  font-size: 1.5rem;
   color: var(--accent);
-  font-size: 1.75rem;
-  margin: 0 0 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.back {
+  font-size: 2rem;
+  line-height: 1;
+  text-decoration: none;
+  color: var(--accent);
+  padding: 0.25rem 0.75rem 0.25rem 0;
+}
+
+/* ---------- Champs et boutons ---------- */
+
+input,
+button {
+  font: inherit;
+  /* 16px minimum : sinon l'iPhone zoome sur le champ. */
+  font-size: max(1rem, 16px);
+}
+
+input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--surface);
+  color: var(--fg);
+}
+
+input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: 0.6rem;
+  background: none;
+  color: var(--fg);
+}
+
+button.primary {
+  padding: 0.7rem 1rem;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+button.icon {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  color: var(--muted);
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* ---------- Mes listes ---------- */
+
+.lists {
+  margin-bottom: 1rem;
+}
+
+.lists a {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 1rem;
+  margin-bottom: 0.5rem;
+  border-radius: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: inherit;
+  text-decoration: none;
+}
+
+.lists .name {
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+
+.count,
+.empty,
+.version {
+  color: var(--muted);
 }
 
 .version {
-  color: var(--muted);
+  margin-top: 2rem;
   font-size: 0.85rem;
+}
+
+/* ---------- Une liste ---------- */
+
+.add {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.note-input {
+  font-size: max(0.9rem, 16px);
+}
+
+.suggestions {
+  margin-top: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.suggestions li + li {
+  border-top: 1px solid var(--line);
+}
+
+.suggestions button {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  width: 100%;
+  padding: 0.75rem 0.8rem;
+  border-radius: 0;
+  text-align: left;
+}
+
+.suggestions small {
+  color: var(--muted);
+}
+
+.message {
+  min-height: 1.5rem;
+  margin: 0.5rem 0;
+  color: var(--muted);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0 0.4rem 0.8rem;
+  margin-bottom: 0.4rem;
+  border-radius: 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.item .text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.item .label {
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+
+.item .note {
+  color: var(--muted);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.note-edit {
+  padding: 0.4rem 0.6rem;
 }

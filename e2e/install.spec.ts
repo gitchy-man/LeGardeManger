@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 test("la page s'affiche avec le titre", async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Le Garde-Manger' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Mes listes' })).toBeVisible();
 });
 
 test('le manifest permet une installation', async ({ page, request }) => {
@@ -25,5 +25,5 @@ test("l'appli s'ouvre hors ligne une fois chargée", async ({ page, context }) =
   await page.evaluate(() => navigator.serviceWorker.ready);
   await context.setOffline(true);
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Le Garde-Manger' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Mes listes' })).toBeVisible();
 });

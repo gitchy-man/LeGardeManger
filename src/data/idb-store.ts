@@ -1,0 +1,164 @@
+import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { cleanLabel, productKey } from '../domain/normalize';
+import {
+  InvalidNameError,
+  itemId,
+  type AddItemResult,
+  type Item,
+  type Product,
+  type ShoppingList,
+  type Store,
+} from './types';
+
+interface Schema extends DBSchema {
+  lists: { key: string; value: ShoppingList };
+  products: { key: string; value: Product };
+  items: { key: string; value: Item; indexes: { byList: string } };
+  meta: { key: string; value: unknown };
+}
+
+export interface IdbStoreOptions {
+  dbName?: string;
+  now?: () => number;
+  newId?: () => string;
+}
+
+const DEFAULT_LIST_NAME = 'Courses';
+
+export async function openIdbStore(options: IdbStoreOptions = {}): Promise<IdbStore> {
+  const db = await openDB<Schema>(options.dbName ?? 'garde-manger', 1, {
+    upgrade(db) {
+      db.createObjectStore('lists', { keyPath: 'id' });
+      db.createObjectStore('products', { keyPath: 'key' });
+      db.createObjectStore('items', { keyPath: 'id' }).createIndex('byList', 'listId');
+      db.createObjectStore('meta');
+    },
+  });
+  const store = new IdbStore(db, options.now ?? Date.now, options.newId ?? (() => crypto.randomUUID()));
+  await store.initialize();
+  return store;
+}
+
+export class IdbStore implements Store {
+  private listeners = new Set<() => void>();
+
+  constructor(
+    private readonly db: IDBPDatabase<Schema>,
+    private readonly now: () => number,
+    private readonly newId: () => string,
+  ) {}
+
+  /** Au tout premier lancement, crée une liste « Courses » pour démarrer tout de suite. */
+  async initialize(): Promise<void> {
+    if (await this.db.get('meta', 'initialized')) return;
+    const tx = this.db.transaction(['lists', 'meta'], 'readwrite');
+    await tx.objectStore('lists').put(this.makeList(DEFAULT_LIST_NAME));
+    await tx.objectStore('meta').put(true, 'initialized');
+    await tx.done;
+  }
+
+  async getLists(): Promise<ShoppingList[]> {
+    const lists = await this.db.getAll('lists');
+    return lists.sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  getList(id: string): Promise<ShoppingList | undefined> {
+    return this.db.get('lists', id);
+  }
+
+  async createList(name: string): Promise<ShoppingList> {
+    const list = this.makeList(requireName(name));
+    await this.db.put('lists', list);
+    this.notify();
+    return list;
+  }
+
+  async renameList(id: string, name: string): Promise<void> {
+    const tx = this.db.transaction('lists', 'readwrite');
+    const list = await tx.store.get(id);
+    if (list) await tx.store.put({ ...list, name: requireName(name) });
+    await tx.done;
+    this.notify();
+  }
+
+  async deleteList(id: string): Promise<void> {
+    const tx = this.db.transaction(['lists', 'items'], 'readwrite');
+    const items = tx.objectStore('items');
+    for (const key of await items.index('byList').getAllKeys(id)) await items.delete(key);
+    await tx.objectStore('lists').delete(id);
+    await tx.done;
+    this.notify();
+  }
+
+  getProducts(): Promise<Product[]> {
+    return this.db.getAll('products');
+  }
+
+  getItems(listId: string): Promise<Item[]> {
+    return this.db.getAllFromIndex('items', 'byList', listId);
+  }
+
+  async addItem(listId: string, rawName: string, note = ''): Promise<AddItemResult> {
+    const key = productKey(rawName);
+    if (!key) throw new InvalidNameError();
+
+    const tx = this.db.transaction(['products', 'items'], 'readwrite');
+    const products = tx.objectStore('products');
+    const items = tx.objectStore('items');
+
+    let product = await products.get(key);
+    if (!product) {
+      product = { key, label: cleanLabel(rawName), createdAt: this.now() };
+      await products.put(product);
+    }
+
+    const id = itemId(listId, key);
+    const existing = await items.get(id);
+    if (existing) {
+      await tx.done;
+      return { status: 'exists', item: existing, product };
+    }
+
+    const item: Item = { id, listId, productKey: key, note: note.trim(), addedAt: this.now() };
+    await items.put(item);
+    await tx.done;
+    this.notify();
+    return { status: 'added', item, product };
+  }
+
+  async setItemNote(id: string, note: string): Promise<void> {
+    const tx = this.db.transaction('items', 'readwrite');
+    const item = await tx.store.get(id);
+    if (item) await tx.store.put({ ...item, note: note.trim() });
+    await tx.done;
+    this.notify();
+  }
+
+  async removeItem(id: string): Promise<void> {
+    await this.db.delete('items', id);
+    this.notify();
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  private makeList(name: string): ShoppingList {
+    return { id: this.newId(), name, createdAt: this.now() };
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) listener();
+  }
+}
+
+function requireName(name: string): string {
+  const clean = cleanLabel(name);
+  if (!productKey(clean)) throw new InvalidNameError();
+  return clean;
+}
