@@ -24,6 +24,30 @@ export interface Item {
   productKey: string;
   note: string;
   addedAt: number;
+  /** Date de la coche ; absent si l'article n'est pas coché. */
+  checkedAt?: number;
+}
+
+/** Une séance de courses validée avec « Courses terminées ». */
+export interface Session {
+  id: string;
+  listId: string;
+  /** Nom de la liste au moment de la validation (la liste peut être renommée ou supprimée). */
+  listName: string;
+  finishedAt: number;
+  count: number;
+}
+
+/** Un produit acheté lors d'une séance : une ligne de l'historique. */
+export interface Purchase {
+  id: string;
+  sessionId: string;
+  listId: string;
+  productKey: string;
+  note: string;
+  at: number;
+  /** Date d'ajout de l'article à la liste, pour pouvoir le remettre en cas d'annulation. */
+  addedAt: number;
 }
 
 export interface AddItemResult {
@@ -47,6 +71,17 @@ export interface Store {
   addItem(listId: string, rawName: string, note?: string): Promise<AddItemResult>;
   setItemNote(itemId: string, note: string): Promise<void>;
   removeItem(itemId: string): Promise<void>;
+  setItemChecked(itemId: string, checked: boolean): Promise<void>;
+
+  /**
+   * « Courses terminées » : les articles cochés de la liste partent dans l'historique
+   * (une séance) et sortent de la liste ; les autres restent. Renvoie `null` si rien n'est coché.
+   */
+  finishShopping(listId: string): Promise<Session | null>;
+  /** Annule une séance : ses articles reviennent dans la liste, cochés, et l'historique est effacé. */
+  undoSession(sessionId: string): Promise<void>;
+  getSessions(): Promise<Session[]>;
+  getPurchases(sessionId: string): Promise<Purchase[]>;
 
   /** Prévient quand les données changent. Renvoie la fonction de désabonnement. */
   subscribe(listener: () => void): () => void;

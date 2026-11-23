@@ -1,10 +1,12 @@
 import { html, nothing, render, type TemplateResult } from 'lit-html';
 import { live } from 'lit-html/directives/live.js';
+import { repeat } from 'lit-html/directives/repeat.js';
 import { suggestProducts, type Suggestion } from '../domain/suggest';
 import {
   InvalidNameError,
   type Item,
   type Product,
+  type Session,
   type ShoppingList,
   type Store,
 } from '../data/types';
@@ -32,6 +34,12 @@ interface State {
   note: string;
   message: string;
   editingNoteOf: string | null;
+  /** Dernière séance validée, pour pouvoir l'annuler. */
+  lastSession: Session | null;
+}
+
+function articles(n: number): string {
+  return `${n} article${n > 1 ? 's' : ''}`;
 }
 
 const collator = new Intl.Collator('fr', { sensitivity: 'base', numeric: true });
@@ -49,6 +57,7 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
     note: '',
     message: '',
     editingNoteOf: null,
+    lastSession: null,
   };
 
   let loadSeq = 0;
@@ -170,6 +179,22 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
     say(`${labelOf(item)} retiré.`);
   }
 
+  async function finishShopping(list: ShoppingList): Promise<void> {
+    const session = await store.finishShopping(list.id);
+    if (!session) return;
+    state.lastSession = session;
+    say(`${articles(session.count)} ${session.count > 1 ? 'validés' : 'validé'}.`);
+    draw();
+  }
+
+  async function undoLastSession(): Promise<void> {
+    const session = state.lastSession;
+    if (!session) return;
+    state.lastSession = null;
+    say('Validation annulée.');
+    await store.undoSession(session.id);
+  }
+
   // ---------- Vues ----------
 
   function view(): TemplateResult {
@@ -189,7 +214,7 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
                 return html`<li>
                   <a href=${listHref(list.id)}>
                     <span class="name">${list.name}</span>
-                    <span class="count">${n ? `${n} article${n > 1 ? 's' : ''}` : 'vide'}</span>
+                    <span class="count">${n ? articles(n) : 'vide'}</span>
                   </a>
                 </li>`;
               })}
@@ -216,7 +241,9 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
   function listView(list: ShoppingList): TemplateResult {
     const keysInList = new Set(state.items.map((i) => i.productKey));
     const suggestions = suggestProducts(state.query, state.products.values(), keysInList);
+    // Un article coché reste à sa place (barré) : rien ne bouge sous le doigt.
     const items = [...state.items].sort((a, b) => collator.compare(labelOf(a), labelOf(b)));
+    const checkedCount = items.filter((i) => i.checkedAt !== undefined).length;
 
     return html`
       <main class="shell">
@@ -268,13 +295,26 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
             </ul>`
           : nothing}
 
-        <p class="message" role="status">${state.message}</p>
+        <div class="message">
+          <span role="status">${state.message}</span>
+          ${state.lastSession
+            ? html`<button class="link" @click=${undoLastSession}>Annuler</button>`
+            : nothing}
+        </div>
 
         ${items.length
           ? html`<ul class="items" aria-label="Articles">
-              ${items.map((item) => itemView(item))}
+              ${repeat(items, (item) => item.id, (item) => itemView(item))}
             </ul>`
           : html`<p class="empty">Rien ne manque pour l’instant.</p>`}
+
+        ${checkedCount
+          ? html`<div class="finish">
+              <button class="primary big" @click=${() => finishShopping(list)}>
+                Courses terminées (${checkedCount})
+              </button>
+            </div>`
+          : nothing}
       </main>
     `;
   }
@@ -282,28 +322,22 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
   function itemView(item: Item): TemplateResult {
     const label = labelOf(item);
     const editing = state.editingNoteOf === item.id;
-    return html`<li class="item">
-      <div class="text">
-        <span class="label">${label}</span>
-        ${editing
-          ? html`<input
-              class="note-edit"
-              aria-label=${`Note pour ${label}`}
-              .value=${item.note}
-              enterkeyhint="done"
-              @keydown=${(e: KeyboardEvent) => {
-                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                if (e.key === 'Escape') {
-                  state.editingNoteOf = null;
-                  draw();
-                }
-              }}
-              @blur=${(e: FocusEvent) => saveNote(item, (e.target as HTMLInputElement).value)}
-            />`
-          : item.note
-            ? html`<span class="note">${item.note}</span>`
-            : nothing}
-      </div>
+    const checked = item.checkedAt !== undefined;
+    const checkbox = html`<input
+      type="checkbox"
+      class="check"
+      aria-label=${label}
+      .checked=${live(checked)}
+      @change=${(e: Event) => store.setItemChecked(item.id, (e.target as HTMLInputElement).checked)}
+    />`;
+    const text = html`<span class="label">${label}</span>
+      ${!editing && item.note ? html`<span class="note">${item.note}</span>` : nothing}`;
+
+    return html`<li class=${checked ? 'item checked' : 'item'}>
+      ${editing
+        ? html`${checkbox}<div class="text">${text}${noteEditor(item, label)}</div>`
+        : // Toute la ligne est cliquable pour cocher : plus facile avec le panier à la main.
+          html`<label class="text-wrap">${checkbox}<span class="text">${text}</span></label>`}
       <button
         class="icon"
         aria-label=${`Modifier la note de ${label}`}
@@ -318,6 +352,23 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
     </li>`;
   }
 
+  function noteEditor(item: Item, label: string): TemplateResult {
+    return html`<input
+      class="note-edit"
+      aria-label=${`Note pour ${label}`}
+      .value=${item.note}
+      enterkeyhint="done"
+      @keydown=${(e: KeyboardEvent) => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+        if (e.key === 'Escape') {
+          state.editingNoteOf = null;
+          draw();
+        }
+      }}
+      @blur=${(e: FocusEvent) => saveNote(item, (e.target as HTMLInputElement).value)}
+    />`;
+  }
+
   // ---------- Branchements ----------
 
   const onHashChange = () => {
@@ -326,6 +377,7 @@ export function startApp(root: HTMLElement, store: Store, version: string): () =
     state.note = '';
     state.message = '';
     state.editingNoteOf = null;
+    state.lastSession = null;
     void load();
   };
   window.addEventListener('hashchange', onHashChange);

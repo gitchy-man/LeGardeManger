@@ -6,6 +6,8 @@ import {
   type AddItemResult,
   type Item,
   type Product,
+  type Purchase,
+  type Session,
   type ShoppingList,
   type Store,
 } from './types';
@@ -15,6 +17,12 @@ interface Schema extends DBSchema {
   products: { key: string; value: Product };
   items: { key: string; value: Item; indexes: { byList: string } };
   meta: { key: string; value: unknown };
+  sessions: { key: string; value: Session };
+  purchases: {
+    key: string;
+    value: Purchase;
+    indexes: { bySession: string; byProduct: string };
+  };
 }
 
 export interface IdbStoreOptions {
@@ -26,12 +34,21 @@ export interface IdbStoreOptions {
 const DEFAULT_LIST_NAME = 'Courses';
 
 export async function openIdbStore(options: IdbStoreOptions = {}): Promise<IdbStore> {
-  const db = await openDB<Schema>(options.dbName ?? 'garde-manger', 1, {
-    upgrade(db) {
-      db.createObjectStore('lists', { keyPath: 'id' });
-      db.createObjectStore('products', { keyPath: 'key' });
-      db.createObjectStore('items', { keyPath: 'id' }).createIndex('byList', 'listId');
-      db.createObjectStore('meta');
+  const db = await openDB<Schema>(options.dbName ?? 'garde-manger', 2, {
+    // Chaque version ajoute ce qui manque, sans toucher aux données existantes.
+    upgrade(db, oldVersion) {
+      if (oldVersion < 1) {
+        db.createObjectStore('lists', { keyPath: 'id' });
+        db.createObjectStore('products', { keyPath: 'key' });
+        db.createObjectStore('items', { keyPath: 'id' }).createIndex('byList', 'listId');
+        db.createObjectStore('meta');
+      }
+      if (oldVersion < 2) {
+        db.createObjectStore('sessions', { keyPath: 'id' });
+        const purchases = db.createObjectStore('purchases', { keyPath: 'id' });
+        purchases.createIndex('bySession', 'sessionId');
+        purchases.createIndex('byProduct', 'productKey');
+      }
     },
   });
   const store = new IdbStore(db, options.now ?? Date.now, options.newId ?? (() => crypto.randomUUID()));
@@ -137,6 +154,94 @@ export class IdbStore implements Store {
   async removeItem(id: string): Promise<void> {
     await this.db.delete('items', id);
     this.notify();
+  }
+
+  async setItemChecked(id: string, checked: boolean): Promise<void> {
+    const tx = this.db.transaction('items', 'readwrite');
+    const item = await tx.store.get(id);
+    if (item && checked !== (item.checkedAt !== undefined)) {
+      const { checkedAt: _previous, ...unchecked } = item;
+      await tx.store.put(checked ? { ...unchecked, checkedAt: this.now() } : unchecked);
+    }
+    await tx.done;
+    this.notify();
+  }
+
+  async finishShopping(listId: string): Promise<Session | null> {
+    const tx = this.db.transaction(['lists', 'items', 'sessions', 'purchases'], 'readwrite');
+    const items = tx.objectStore('items');
+    const checked = (await items.index('byList').getAll(listId)).filter(
+      (item) => item.checkedAt !== undefined,
+    );
+    if (checked.length === 0) {
+      await tx.done;
+      return null;
+    }
+
+    const list = await tx.objectStore('lists').get(listId);
+    const finishedAt = this.now();
+    const session: Session = {
+      id: this.newId(),
+      listId,
+      listName: list?.name ?? '',
+      finishedAt,
+      count: checked.length,
+    };
+    await tx.objectStore('sessions').put(session);
+    const purchases = tx.objectStore('purchases');
+    for (const item of checked) {
+      await purchases.put({
+        id: `${session.id}|${item.productKey}`,
+        sessionId: session.id,
+        listId,
+        productKey: item.productKey,
+        note: item.note,
+        at: finishedAt,
+        addedAt: item.addedAt,
+      });
+      await items.delete(item.id);
+    }
+    await tx.done;
+    this.notify();
+    return session;
+  }
+
+  async undoSession(sessionId: string): Promise<void> {
+    const tx = this.db.transaction(['lists', 'items', 'sessions', 'purchases'], 'readwrite');
+    const sessions = tx.objectStore('sessions');
+    const session = await sessions.get(sessionId);
+    if (session) {
+      const listStillExists = (await tx.objectStore('lists').get(session.listId)) !== undefined;
+      const items = tx.objectStore('items');
+      const purchases = tx.objectStore('purchases');
+      for (const purchase of await purchases.index('bySession').getAll(sessionId)) {
+        const id = itemId(session.listId, purchase.productKey);
+        // Si l'article a été rajouté entre-temps, on garde la version actuelle.
+        if (listStillExists && !(await items.get(id))) {
+          await items.put({
+            id,
+            listId: session.listId,
+            productKey: purchase.productKey,
+            note: purchase.note,
+            addedAt: purchase.addedAt,
+            checkedAt: purchase.at,
+          });
+        }
+        await purchases.delete(purchase.id);
+      }
+      await sessions.delete(sessionId);
+    }
+    await tx.done;
+    this.notify();
+  }
+
+  async getSessions(): Promise<Session[]> {
+    const sessions = await this.db.getAll('sessions');
+    return sessions.sort((a, b) => b.finishedAt - a.finishedAt);
+  }
+
+  getPurchases(sessionId: string): Promise<Purchase[]> {
+    return this.db.getAllFromIndex('purchases', 'bySession', sessionId);
   }
 
   subscribe(listener: () => void): () => void {

@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import { openDB } from 'idb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openIdbStore, type IdbStore } from './idb-store';
 import { InvalidNameError } from './types';
@@ -117,6 +118,126 @@ describe('articles', () => {
     await store.removeItem(item.id);
     expect(await store.getItems(listId)).toEqual([]);
     expect((await store.getProducts()).map((p) => p.key)).toEqual(['beurre']);
+  });
+});
+
+describe('courses', () => {
+  let listId: string;
+  const checkedOf = async () =>
+    (await store.getItems(listId)).filter((i) => i.checkedAt !== undefined).map((i) => i.productKey);
+
+  beforeEach(async () => {
+    listId = (await store.getLists())[0].id;
+    for (const name of ['Lait', 'Pâtes', 'Café', 'Sel']) await store.addItem(listId, name);
+  });
+
+  it('coche et décoche un article', async () => {
+    await store.setItemChecked(`${listId}|lait`, true);
+    await store.setItemChecked(`${listId}|cafe`, true);
+    expect((await checkedOf()).sort()).toEqual(['cafe', 'lait']);
+
+    await store.setItemChecked(`${listId}|cafe`, false);
+    expect(await checkedOf()).toEqual(['lait']);
+  });
+
+  it('« Courses terminées » sort les cochés vers l’historique et garde les autres', async () => {
+    await store.setItemChecked(`${listId}|lait`, true);
+    await store.setItemChecked(`${listId}|pates`, true);
+    await store.setItemNote(`${listId}|lait`, 'x2');
+
+    const session = await store.finishShopping(listId);
+    expect(session).toMatchObject({ listId, listName: 'Courses', count: 2 });
+
+    const remaining = (await store.getItems(listId)).map((i) => i.productKey).sort();
+    expect(remaining).toEqual(['cafe', 'sel']);
+
+    const purchases = await store.getPurchases(session!.id);
+    expect(purchases.map((p) => [p.productKey, p.note]).sort()).toEqual([
+      ['lait', 'x2'],
+      ['pates', ''],
+    ]);
+    expect(purchases.every((p) => p.at === session!.finishedAt)).toBe(true);
+    expect(await store.getSessions()).toEqual([session]);
+  });
+
+  it('ne crée pas de séance si rien n’est coché', async () => {
+    expect(await store.finishShopping(listId)).toBeNull();
+    expect(await store.getSessions()).toEqual([]);
+    expect(await store.getItems(listId)).toHaveLength(4);
+  });
+
+  it('ne valide que la liste concernée', async () => {
+    const other = await store.createList('Autre');
+    await store.addItem(other.id, 'Lait');
+    await store.setItemChecked(`${other.id}|lait`, true);
+    await store.setItemChecked(`${listId}|sel`, true);
+
+    await store.finishShopping(listId);
+    expect(await store.getItems(other.id)).toHaveLength(1);
+    expect((await store.getItems(other.id))[0].checkedAt).toBeDefined();
+  });
+
+  it('annuler remet les articles cochés dans la liste et efface la séance', async () => {
+    await store.setItemChecked(`${listId}|lait`, true);
+    await store.setItemNote(`${listId}|lait`, 'x2');
+    const session = await store.finishShopping(listId);
+
+    await store.undoSession(session!.id);
+    const lait = (await store.getItems(listId)).find((i) => i.productKey === 'lait');
+    expect(lait).toMatchObject({ note: 'x2' });
+    expect(lait?.checkedAt).toBeDefined();
+    expect(await store.getSessions()).toEqual([]);
+    expect(await store.getPurchases(session!.id)).toEqual([]);
+  });
+
+  it('annuler ne remplace pas un article rajouté entre-temps', async () => {
+    await store.setItemChecked(`${listId}|lait`, true);
+    const session = await store.finishShopping(listId);
+    await store.addItem(listId, 'lait', 'nouvelle note');
+
+    await store.undoSession(session!.id);
+    const lait = (await store.getItems(listId)).filter((i) => i.productKey === 'lait');
+    expect(lait).toHaveLength(1);
+    expect(lait[0]).toMatchObject({ note: 'nouvelle note' });
+    expect(lait[0].checkedAt).toBeUndefined();
+  });
+
+  it('l’historique survit à la suppression de la liste', async () => {
+    await store.setItemChecked(`${listId}|lait`, true);
+    const session = await store.finishShopping(listId);
+    await store.deleteList(listId);
+
+    expect(await store.getSessions()).toHaveLength(1);
+    expect(await store.getPurchases(session!.id)).toHaveLength(1);
+  });
+});
+
+describe('mise à niveau des données existantes', () => {
+  it('garde les listes et articles créés avec la version 1', async () => {
+    const dbName = `test-${++dbCount}`;
+    const v1 = await openDB(dbName, 1, {
+      upgrade(db) {
+        db.createObjectStore('lists', { keyPath: 'id' });
+        db.createObjectStore('products', { keyPath: 'key' });
+        db.createObjectStore('items', { keyPath: 'id' }).createIndex('byList', 'listId');
+        db.createObjectStore('meta');
+      },
+    });
+    await v1.put('lists', { id: 'L1', name: 'Courses', createdAt: 1 });
+    await v1.put('products', { key: 'lait', label: 'Lait', createdAt: 1 });
+    await v1.put('items', { id: 'L1|lait', listId: 'L1', productKey: 'lait', note: 'x2', addedAt: 1 });
+    await v1.put('meta', true, 'initialized');
+    v1.close();
+
+    const upgraded = await openFresh(dbName);
+    expect(await upgraded.getLists()).toHaveLength(1);
+    const [lait] = await upgraded.getItems('L1');
+    expect(lait).toMatchObject({ productKey: 'lait', note: 'x2' });
+    expect(lait.checkedAt).toBeUndefined();
+
+    await upgraded.setItemChecked('L1|lait', true);
+    expect(await upgraded.finishShopping('L1')).toMatchObject({ count: 1 });
+    upgraded.close();
   });
 });
 
