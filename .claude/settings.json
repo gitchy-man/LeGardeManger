@@ -72,5 +72,28 @@
       "PowerShell(git clean *)",
       "PowerShell(npm publish *)"
     ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Edit(src/**/*.ts)",
+            "command": "npx vitest run >&2 || exit 2",
+            "timeout": 120,
+            "statusMessage": "Tests unitaires…"
+          },
+          {
+            "type": "command",
+            "if": "Write(src/**/*.ts)",
+            "command": "npx vitest run >&2 || exit 2",
+            "timeout": 120,
+            "statusMessage": "Tests unitaires…"
+          }
+        ]
+      }
+    ]
   }
 }
